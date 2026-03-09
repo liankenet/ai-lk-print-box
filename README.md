@@ -1,76 +1,91 @@
 # 链科云打印盒 MCP 服务器
 
-这是一个基于 MCP (Model Context Protocol) 的链科云打印盒服务器，提供云打印盒操作打印机的接口。
+基于 MCP (Model Context Protocol) 的链科云打印盒服务器，内置 Skill 指引，让对话式 AI 能正确调用打印和扫描功能。
 
-## 功能特性
+## 架构：MCP + Skill
 
-### 🖨️ 打印机管理
-- **获取打印机列表** - 查看设备连接的所有打印机
-- **获取打印机参数** - 获取打印机支持的纸张尺寸、颜色等配置
-- **获取纸张尺寸** - 查询打印机支持的纸张规格
-- **打印机状态查询** - 实时获取打印机状态（缺纸、卡纸等）
+```
+对话式 AI（Cursor / Claude / Gemini 等）
+  ├── 读取 SKILL.md  →  理解「怎么用」（流程、参数、错误处理）
+  └── 调用 MCP Server  →  执行「做什么」（stdio 传输，按需启动）
+```
 
-### 📄 打印任务管理
-- **提交打印任务** - 支持URL文件打印（图片、PDF、Office文档等）
-- **本地文件打印** - 支持从MCP读取本地文件并上传打印
-- **查询任务状态** - 实时查询打印任务进度
-- **取消打印任务** - 取消排队中的打印任务
+- **MCP Server（main.py）**：提供原子化的打印/扫描工具，通过 stdio 传输
+- **Skill（SKILL.md）**：编排调用流程，AI 按此流程依次调用 MCP 工具
 
-## 安装配置
+## 功能
 
-### 1. 环境要求
-- Python 3.8+
-- uv 包管理器
+### 🖨️ 打印
+- 获取打印机列表 / 参数 / 实时状态
+- 提交打印任务（URL 或本地文件）
+- 查询 / 取消打印任务
+
+### 📷 扫描
+- 获取扫描仪列表 / 参数 / 状态
+- 创建 / 查询 / 删除扫描任务
+
+## 快速开始
+
+### 1. 准备凭据
+
+| 凭据 | 来源 |
+|------|------|
+| `ApiKey` | [开放平台](https://open.liankenet.com/) 注册获取 |
+| `DeviceId` | 扫描设备二维码获取 |
+| `DeviceKey` | 扫描设备二维码获取 |
 
 ### 2. 安装依赖
+
 ```bash
 uv sync
 ```
 
-> 💡 **获取API密钥**: 请到 [链科开放平台](https://open.liankenet.com/) 注册获取
+### 3. 配置 MCP 客户端
 
-### 4. 获取设备信息
-从链科云盒设备二维码中获取：
-- `deviceId` - 设备ID
-- `deviceKey` - 设备密钥
-
-## 使用方法
-
-在cursor中部署
+#### Cursor / Claude Desktop / Gemini CLI
 
 ```json
 {
   "mcpServers": {
-    "printBoxHttpMcp": {
-      "url": "http://127.0.0.1:8000/mcp",
-      "headers": {
-        "ApiKey": "",
-        "deviceId": "",
-        "deviceKey": ""
+    "liankePrintBox": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/mcp-lk-print-box", "main.py"],
+      "env": {
+        "ApiKey": "你的API密钥",
+        "DeviceId": "你的设备ID",
+        "DeviceKey": "你的设备密钥"
       }
     }
   }
 }
 ```
 
-![演示图片](./tests/8db40f0248071685893aa7e60b1d6986.png)
+### 4. 使用
 
-### 启动MCP服务器
+配置完成后，直接对 AI 说：
+
+> "帮我打印这个 PDF 文件"
+
+AI 会自动读取 SKILL.md，按正确流程调用 MCP 工具完成打印。
+
+## 调用流程（详见 SKILL.md）
+
+1. `get_device_info` → 确认设备在线
+2. `get_printer_list` → 获取打印机列表
+3. `get_printer_params` → 获取打印机参数
+4. `submit_print_job` → 提交打印任务
+5. `get_job_status` → 查询任务状态
+
+## Docker 部署
+
 ```bash
-uv run main.py
+docker compose up -d
 ```
-
-### 扩展开发
-可以基于现有接口扩展更多功能：
-- 批量打印任务
-- 打印模板管理
-- 打印统计分析
-- 设备监控告警
 
 ## 支持与反馈
 
-如有问题或建议，请提交Issue或联系开发团队。
+如有问题或建议，请提交 Issue 或联系开发团队。
 
 ---
 
-**链科云打印 MCP 服务器** - 让打印更简单！ 🚀
+**链科云打印 MCP 服务器** - 让 AI 驱动打印！ 🚀

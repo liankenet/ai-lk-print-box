@@ -14,8 +14,9 @@ RUN pip install uv
 
 # 复制项目文件
 COPY pyproject.toml uv.lock ./
-COPY cloud_print/ ./cloud_print/
+COPY lianke_printing/ ./lianke_printing/
 COPY main.py ./
+COPY SKILL.md ./
 
 # 安装Python依赖
 RUN uv sync --frozen

@@ -26,13 +26,10 @@ import logging
 import os
 import json
 import mimetypes
-from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional, Union, AsyncIterator
-from dataclasses import dataclass
+import functools
+from typing import Dict, Any, Optional
 
-from mcp import ServerSession
 from mcp.server.fastmcp import FastMCP, Context
-from pydantic import Field
 
 from lianke_printing import LiankePrinting
 from lianke_printing.scanner import LiankeScanning
@@ -42,691 +39,468 @@ from lianke_printing.exceptions import LiankePrintingException
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def create_lianke_client(api_key: str, device_id: str, device_key: str) -> LiankePrinting:
-    """创建 LiankePrinting 客户端实例"""
-    if not api_key or not device_id or not device_key:
-        raise ValueError("API密钥、设备ID和设备密钥不能为空")
-    
-    return LiankePrinting(api_key, device_id, device_key)
+
+# ==================== 公共配置 ====================
+
+def get_config(device_id: Optional[str] = None, device_key: Optional[str] = None) -> tuple[str, str, str]:
+    """从环境变量获取认证配置，支持参数覆盖"""
+    api_key = os.environ.get("ApiKey", "")
+    did = device_id or os.environ.get("DeviceId", "")
+    dkey = device_key or os.environ.get("DeviceKey", "")
+
+    if not api_key:
+        raise ValueError("缺少 ApiKey，请在环境变量中设置")
+    if not did or not dkey:
+        raise ValueError("缺少 DeviceId 或 DeviceKey，请在环境变量或参数中设置")
+
+    return api_key, did, dkey
 
 
-def create_scanning_client(api_key: str, device_id: str, device_key: str) -> LiankeScanning:
-    """创建 LiankeScanning 客户端实例"""
-    if not api_key or not device_id or not device_key:
-        raise ValueError("API密钥、设备ID和设备密钥不能为空")
-    
-    return LiankeScanning(api_key, device_id, device_key)
+def create_printing_client(device_id: Optional[str] = None, device_key: Optional[str] = None) -> LiankePrinting:
+    """创建打印客户端"""
+    api_key, did, dkey = get_config(device_id, device_key)
+    return LiankePrinting(api_key, did, dkey)
 
 
-# 创建MCP服务器
-mcp = FastMCP("LiankePrintBox",
-              website_url="https://www.liankenet.com")
+def create_scanning_client(device_id: Optional[str] = None, device_key: Optional[str] = None) -> LiankeScanning:
+    """创建扫描客户端"""
+    api_key, did, dkey = get_config(device_id, device_key)
+    return LiankeScanning(api_key, did, dkey)
+
+
+# ==================== 错误处理装饰器 ====================
+
+def handle_errors(func):
+    """统一错误处理装饰器"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except LiankePrintingException as e:
+            return {"code": e.code or 503, "msg": e.msg}
+        except ValueError as e:
+            return {"code": 400, "msg": str(e)}
+        except Exception as e:
+            logger.error(f"{func.__name__} 失败: {e}")
+            return {"code": 503, "msg": f"{func.__name__} 失败: {str(e)}"}
+    return wrapper
+
+
+# ==================== 创建MCP服务器 ====================
+
+mcp = FastMCP("LiankePrintBox", website_url="https://www.liankenet.com")
+
+
+# ==================== 设备信息工具 ====================
+
+@mcp.tool()
+@handle_errors
+def get_device_info(
+    device_id: Optional[str] = None,
+    device_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """获取设备信息（在线状态、型号、固件版本、网络信息）
+
+    Args:
+        device_id: 设备ID（可选，默认使用环境变量 DeviceId）
+        device_key: 设备密钥（可选，默认使用环境变量 DeviceKey）
+
+    Returns:
+        设备信息，包含 online(在线状态: null=从未开机, 1=在线, 0=离线)、
+        usb_port_num(USB端口数)、expire_date(过期时间)、version(软硬件版本)、network(网络信息)
+    """
+    client = create_printing_client(device_id, device_key)
+    return client.device_info()
+
+
+# ==================== 打印机工具 ====================
+
+@mcp.tool()
+@handle_errors
+def get_printer_list(
+    device_id: Optional[str] = None,
+    device_key: Optional[str] = None,
+    printer_type: int = 1
+) -> Dict[str, Any]:
+    """获取设备打印机列表
+
+    Args:
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+        printer_type: 打印机类型 1=USB打印机 2=网络打印机 3=USB和网络打印机
+
+    Returns:
+        打印机列表，每个打印机包含：
+        - driver_name: 打印机型号名称（提交打印任务时作为 printerModel）
+        - port: USB端口号（提交打印任务时作为 devicePort）
+        - driver_type: 适配状态(0=待适配, 1=已适配, 2=不支持)
+        - isPrinter: 是否为打印机(1=是, 0=否)
+        - support_status: 是否支持状态查询
+        - species: 打印机类型(0=未知,1=针式,2=小票,3=标签,4=激光,5=喷墨,6=热升华,7=证卡)
+        - printer_state: 打印机状态(idle=就绪, printing=打印中, outOfPaper=缺纸等)
+    """
+    client = create_printing_client(device_id, device_key)
+    result = client.printer_list(printer_type)
+    printers = result.get("data", {}).get("row", [])
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {"printers": printers, "total": len(printers)}
+    }
 
 
 @mcp.tool()
-def get_device_info(
-    ctx: Context,
-    device_id: Optional[str] = None, 
-    device_key: Optional[str] = None,
+@handle_errors
+def get_printer_params(
+    printer_hash: str,
+    device_id: Optional[str] = None,
+    device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """获取设备信息"""
-    headers = ctx.request_context.request.headers
-    api_key = headers.get("ApiKey")
-    device_id = headers.get("DeviceId") or device_id
-    device_key = headers.get("DeviceKey") or device_key
-    
-    if not api_key:
-        return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-    client = create_lianke_client(api_key, device_id, device_key)
-    result = client.device_info()
+    """获取打印机参数配置（调用后请缓存数据）
+
+    Args:
+        printer_hash: 打印机哈希ID
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
+    Returns:
+        打印机参数配置，包含：
+        - Capabilities.Papers: 支持的纸张及对应代码（如 A4=9, A5=11）
+        - Capabilities.Color: 支持的颜色模式（黑白=1, 彩色=2）
+        - Capabilities.Duplex: 双面打印（关闭=1, 长边=2, 短边=3）
+        - Capabilities.Bins: 纸张来源
+        - Capabilities.Copies: 最大打印份数
+        - Capabilities.Orientation: 纸张方向（竖向=1, 横向=2）
+        - DevMode: 默认参数值
+    """
+    client = create_printing_client(device_id, device_key)
+    result = client.printer_params(printer_hash)
+    return {"code": 200, "msg": "success", "data": result.get("data", {})}
+
+
+@mcp.tool()
+@handle_errors
+def get_printer_status(
+    printer_hash: str,
+    device_id: Optional[str] = None,
+    device_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """获取打印机实时状态
+
+    注意：仅支持 printer_list 中 support_status=true 的打印机。
+    该接口实时同步数据，返回较慢，请需要时再调用。
+
+    Args:
+        printer_hash: 打印机唯一id
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
+    Returns:
+        打印机状态：headOpened(盖子开启), paperJam(卡纸), outOfPaper(缺纸),
+        outOfRibbon(缺碳带), outOfInk(低墨量), pause(暂停), printing(打印中)
+    """
+    client = create_printing_client(device_id, device_key)
+    result = client.printer_status(printer_hash)
+    if result is None:
+        return {"code": 503, "msg": "获取打印机状态失败"}
     return result
 
 
-@mcp.tool()
-def get_printer_list(
-    ctx: Context,
-    device_id: Optional[str] = None, 
-    device_key: Optional[str] = None, 
-    printer_type: int = 1
-) -> Dict[str, Any]:
-    """
-    获取设备打印机列表
-    
-    Args:
-        device_id: 设备ID（可选，未提供时使用默认配置）
-        device_key: 设备密钥（可选，未提供时使用默认配置）
-        printer_type: 打印机类型 1=USB打印机 2=网络打印机 3=USB和网络打印机
-    
-    Returns:
-        打印机列表信息，包含打印机型号、端口、状态等
-    """
-    headers = ctx.request_context.request.headers
-    print("ApiKey", headers.get("ApiKey"))
+# ==================== 打印任务工具 ====================
 
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 获取打印机列表
-        result = client.printer_list(printer_type)
-        printers = result.get("data", {}).get("row", [])
-        
-        return {
-            "code": 200,
-            "msg": "success",
-            "data": {
-                "printers": printers,
-                "total": len(printers)
-            }
-        }
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"获取打印机列表失败: {e}")
-        return {"code": 503, "msg": f"获取打印机列表失败: {str(e)}"}
-
-
-def get_default_printer(api_key: str, device_id: str, device_key: str):
+def get_default_printer(device_id: Optional[str] = None, device_key: Optional[str] = None):
     """获取默认打印机"""
     try:
-        client = create_lianke_client(api_key, device_id, device_key)
-        result = client.printer_list(1)  # USB打印机
+        client = create_printing_client(device_id, device_key)
+        result = client.printer_list(1)
         printers = result.get("data", {}).get("row", [])
         if not printers:
             return None
-        # 默认取第一个
-        printer_hash = printers[0]["hash_id"]
-        return printer_hash
+        return printers[0]["hash_id"]
     except Exception as e:
         logger.error(f"获取默认打印机失败: {e}")
         return None
 
 
 @mcp.tool()
-def get_printer_params(
-    ctx: Context,
-    printer_hash: str, 
-    device_id: Optional[str] = None, 
-    device_key: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    获取打印机参数配置
-    
-    Args:
-        printer_hash: 打印机哈希ID
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
-    Returns:
-        打印机参数配置，包含纸张尺寸、颜色、双面打印等选项
-    """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 获取打印机参数
-        result = client.printer_params(printer_hash)
-        return {
-            "code": 200,
-            "msg": "success",
-            "data": result.get("data", {})
-        }
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"获取打印机参数失败: {e}")
-        return {"code": 503, "msg": f"获取打印机参数失败: {str(e)}"}
-
-
-@mcp.tool()
+@handle_errors
 def submit_print_job(
-    ctx: Context,
     job_file_url: str,
-    kwargs: str,
+    kwargs: str = "{}",
     device_id: Optional[str] = None,
     device_key: Optional[str] = None,
     printerHash: Optional[str] = None,
-    dm_paper_size: str = "9",  # A4
-    jp_scale: str = "fit",  # 自适应
-    dm_orientation: str = "1",  # 竖向
-    dm_copies: str = "1",  # 打印1份
-    dm_color: str = "1"  # 黑白
+    dm_paper_size: str = "9",
+    jp_scale: str = "fit",
+    dm_orientation: str = "1",
+    dm_copies: str = "1",
+    dm_color: str = "1"
 ) -> Dict[str, Any]:
-    """
-    提交打印任务
-    
+    """提交打印任务（通过URL）
+
+    该API为异步接口，会立即返回task_id，不表示打印完成。
+    需使用 get_job_status 轮询结果（建议间隔10秒）。
+
     Args:
-        job_file_url: 打印文件URL（支持图片、PDF、Office文档等）
-        kwargs: 其他打印参数（JSON字符串格式）
-        device_id: 设备ID（可选，未提供时使用环境变量）
-        device_key: 设备密钥（可选，未提供时使用环境变量）
-        printerHash: 打印机hash_id，从打印机列表获取，对应变量名称为hash_id
-        dm_paper_size: 纸张尺寸（9=A4, 11=A5）
-        jp_scale: 自动缩放（fit=自适应, fitw=宽度优先, fith=高度优先, fill=拉伸, cover=铺满, none=关闭）
+        job_file_url: 打印文件URL（支持图片、PDF、Office文档等。多个链接用换行符拼接）
+        kwargs: 其他打印参数（JSON字符串格式，可传入 dmDuplex/jpPageRange/jpAutoAlign 等进阶参数）
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+        printerHash: 打印机hash_id，从打印机列表获取
+        dm_paper_size: 纸张尺寸代码（9=A4, 11=A5，更多值见 get_printer_params 的 Capabilities.Papers）
+        jp_scale: 缩放模式（fit=自适应, fitw=宽度优先, fith=高度优先, fill=拉伸, cover=铺满, none=关闭, xx%=自定义百分比）
         dm_orientation: 纸张方向（1=竖向, 2=横向）
         dm_copies: 打印份数
         dm_color: 打印颜色（1=黑白, 2=彩色）
-    
-    Returns:
-        任务提交结果，包含task_id用于后续查询
-    """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
 
+    Returns:
+        包含 task_id 的结果，用于后续查询状态
+    """
+    if not printerHash:
+        printerHash = get_default_printer(device_id, device_key)
         if not printerHash:
-            printerHash = get_default_printer(api_key, device_id, device_key)
-            if not printerHash:
-                return {"code": 404, "msg": "打印未连接"}
+            return {"code": 404, "msg": "打印机未连接"}
 
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 构建打印任务参数
-        job_params = {
-            "dmPaperSize": int(dm_paper_size),
-            "jpScale": jp_scale,
-            "dmOrientation": int(dm_orientation),
-            "dmCopies": int(dm_copies),
-            "dmColor": int(dm_color),
-        }
-        
-        # 添加额外参数（如果提供了kwargs）
-        if kwargs:
-            try:
-                extra_params = json.loads(kwargs)
-                job_params.update(extra_params)
-            except json.JSONDecodeError:
-                logger.warning(f"无法解析kwargs参数: {kwargs}")
-                # 如果不是JSON格式，尝试作为简单的键值对处理
-                if "=" in kwargs:
-                    pairs = kwargs.split(",")
-                    for pair in pairs:
-                        if "=" in pair:
-                            key, value = pair.split("=", 1)
-                            job_params[key.strip()] = value.strip()
-        
-        # 准备文件数据
-        import requests
+    client = create_printing_client(device_id, device_key)
+
+    job_params = {
+        "dmPaperSize": int(dm_paper_size),
+        "jpScale": jp_scale,
+        "dmOrientation": int(dm_orientation),
+        "dmCopies": int(dm_copies),
+        "dmColor": int(dm_color),
+    }
+
+    if kwargs and kwargs != "{}":
         try:
-            file_response = requests.get(job_file_url, timeout=30)
-            file_response.raise_for_status()
-            file_content = file_response.content
-            filename = job_file_url.split('/')[-1] or 'document.pdf'
-            
-            # 获取文件MIME类型
-            mimetype, _ = mimetypes.guess_type(job_file_url)
-            if not mimetype:
-                mimetype = 'application/octet-stream'
-            
-            # 准备文件上传
-            job_files = [("jobFile", (filename, io.BytesIO(file_content), mimetype))]
-            
-            # 提交打印任务
-            result = client.add_job(job_files, printerHash, **job_params)
-            return result
-            
-        except requests.RequestException as e:
-            logger.error(f"下载文件失败: {e}")
-            return {"code": 400, "msg": f"下载文件失败: {str(e)}"}
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"提交打印任务失败: {e}")
-        return {"code": 503, "msg": f"提交打印任务失败: {str(e)}"}
+            extra_params = json.loads(kwargs)
+            job_params.update(extra_params)
+        except json.JSONDecodeError:
+            logger.warning(f"无法解析kwargs参数: {kwargs}")
+
+    import requests
+    file_response = requests.get(job_file_url, timeout=30)
+    file_response.raise_for_status()
+    file_content = file_response.content
+    filename = job_file_url.split('/')[-1] or 'document.pdf'
+
+    mimetype, _ = mimetypes.guess_type(job_file_url)
+    if not mimetype:
+        mimetype = 'application/octet-stream'
+
+    job_files = [("jobFile", (filename, io.BytesIO(file_content), mimetype))]
+    result = client.add_job(job_files, printerHash, **job_params)
+    return result
 
 
 @mcp.tool()
+@handle_errors
 def submit_print_job_with_file(
-    ctx: Context,
-    file_path: str = Field(description="本地文件路径（支持相对或绝对路径）"),
-    printer_hash: Optional[str] = Field(description="打印机ID", default=None),
-    kwargs: str = Field(description="其他打印参数（JSON字符串格式）", default="{}"),
-    device_id: Optional[str] = Field(description="设备ID", default=None),
-    device_key: Optional[str] = Field(description="设备密钥", default=None),
-    dm_paper_size: str = Field(description="纸张尺寸（9=A4, 11=A5）", default="9"),
-    jp_scale: str = Field(description="自动缩放（fit=自适应, fitw=宽度优先, fith=高度优先, fill=拉伸, cover=铺满, none=关闭）", default="fit"),
-    dm_orientation: str = Field(description="纸张方向（1=竖向, 2=横向）", default="1"),
-    dm_copies: str = Field(description="打印份数", default="1"),
-    dm_color: str = Field(description="打印颜色（1=黑白, 2=彩色）", default="1")
+    file_path: str,
+    printer_hash: Optional[str] = None,
+    kwargs: str = "{}",
+    device_id: Optional[str] = None,
+    device_key: Optional[str] = None,
+    dm_paper_size: str = "9",
+    jp_scale: str = "fit",
+    dm_orientation: str = "1",
+    dm_copies: str = "1",
+    dm_color: str = "1"
 ) -> Dict[str, Any]:
-    """
-    从本地文件提交打印任务（支持从MCP读取文件）
-    
+    """从本地文件提交打印任务
+
     Args:
-        file_path: 本地文件路径（相对或绝对路径）
+        file_path: 本地文件路径（支持图片、PDF、Office文档等）
+        printer_hash: 打印机hash_id（可选，默认使用第一个USB打印机）
         kwargs: 其他打印参数（JSON字符串格式）
-        device_id: 设备ID（可选，未提供时使用环境变量）
-        device_key: 设备密钥（可选，未提供时使用环境变量）
-        printer_hash: 打印机ID
-        dm_paper_size: 纸张尺寸（9=A4, 11=A5）
-        jp_scale: 自动缩放（fit=自适应, fitw=宽度优先, fith=高度优先, fill=拉伸, cover=铺满, none=关闭）
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+        dm_paper_size: 纸张尺寸代码（9=A4, 11=A5）
+        jp_scale: 缩放模式（fit=自适应, fitw=宽度优先, fith=高度优先, fill=拉伸, cover=铺满, none=关闭）
         dm_orientation: 纸张方向（1=竖向, 2=横向）
         dm_copies: 打印份数
         dm_color: 打印颜色（1=黑白, 2=彩色）
-    
+
     Returns:
-        任务提交结果，包含task_id用于后续查询
+        包含 task_id 的结果
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-
+    if not printer_hash:
+        printer_hash = get_default_printer(device_id, device_key)
         if not printer_hash:
-            printer_hash = get_default_printer(api_key, device_id, device_key)
-            if not printer_hash:
-                return {"code": 404, "msg": "打印未连接"}
+            return {"code": 404, "msg": "打印机未连接"}
 
-        # 检查文件是否存在
-        if not os.path.exists(file_path):
-            return {"code": 400, "msg": f"文件不存在: {file_path}"}
+    if not os.path.exists(file_path):
+        return {"code": 400, "msg": f"文件不存在: {file_path}"}
 
-        # 读取文件内容
-        try:
-            with open(file_path, 'rb') as f:
-                file_content = f.read()
-        except Exception as e:
-            return {"code": 400, "msg": f"读取文件失败: {str(e)}"}
+    with open(file_path, 'rb') as f:
+        file_content = f.read()
 
-        # 获取文件信息
-        filename = os.path.basename(file_path)
-        mimetype, _ = mimetypes.guess_type(file_path)
-        if not mimetype:
-            # 根据文件扩展名设置默认MIME类型
-            ext = os.path.splitext(filename)[1].lower()
-            mimetype_map = {
-                '.pdf': 'application/pdf',
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.png': 'image/png',
-                '.gif': 'image/gif',
-                '.bmp': 'image/bmp',
-                '.doc': 'application/msword',
-                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                '.xls': 'application/vnd.ms-excel',
-                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                '.ppt': 'application/vnd.ms-powerpoint',
-                '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                '.txt': 'text/plain'
-            }
-            mimetype = mimetype_map.get(ext, 'application/octet-stream')
-
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 准备文件上传
-        job_files = [("jobFile", (filename, io.BytesIO(file_content), mimetype))]
-
-        # 构建打印任务参数
-        job_params = {
-            "dmPaperSize": int(dm_paper_size),
-            "jpScale": jp_scale,
-            "dmOrientation": int(dm_orientation),
-            "dmCopies": int(dm_copies),
-            "dmColor": int(dm_color),
+    filename = os.path.basename(file_path)
+    mimetype, _ = mimetypes.guess_type(file_path)
+    if not mimetype:
+        ext = os.path.splitext(filename)[1].lower()
+        mimetype_map = {
+            '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+            '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.ppt': 'application/vnd.ms-powerpoint',
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            '.txt': 'text/plain'
         }
-        
-        # 添加额外参数（如果提供了kwargs）
-        if kwargs:
-            import json
-            try:
-                extra_params = json.loads(kwargs)
-                job_params.update(extra_params)
-            except json.JSONDecodeError:
-                logger.warning(f"无法解析kwargs参数: {kwargs}")
-                # 如果不是JSON格式，尝试作为简单的键值对处理
-                if "=" in kwargs:
-                    pairs = kwargs.split(",")
-                    for pair in pairs:
-                        if "=" in pair:
-                            key, value = pair.split("=", 1)
-                            job_params[key.strip()] = value.strip()
-        
-        # 提交打印任务
-        result = client.add_job(job_files, printer_hash, **job_params)
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"提交打印任务失败: {e}")
-        return {"code": 503, "msg": f"提交打印任务失败: {str(e)}"}
+        mimetype = mimetype_map.get(ext, 'application/octet-stream')
+
+    client = create_printing_client(device_id, device_key)
+    job_files = [("jobFile", (filename, io.BytesIO(file_content), mimetype))]
+
+    job_params = {
+        "dmPaperSize": int(dm_paper_size),
+        "jpScale": jp_scale,
+        "dmOrientation": int(dm_orientation),
+        "dmCopies": int(dm_copies),
+        "dmColor": int(dm_color),
+    }
+
+    if kwargs and kwargs != "{}":
+        try:
+            extra_params = json.loads(kwargs)
+            job_params.update(extra_params)
+        except json.JSONDecodeError:
+            logger.warning(f"无法解析kwargs参数: {kwargs}")
+
+    result = client.add_job(job_files, printer_hash, **job_params)
+    return result
 
 
 @mcp.tool()
+@handle_errors
 def get_job_status(
-    ctx: Context,
     task_id: str,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    查询打印任务状态
-    
+    """查询打印任务状态
+
+    建议轮询间隔为10秒。
+
     Args:
         task_id: 任务ID（提交任务时返回的task_id）
-        device_id: 设备ID（可选，未提供时使用环境变量）
-        device_key: 设备密钥（可选，未提供时使用环境变量）
-        device_port: 设备端口（可选，未提供时使用环境变量）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
-        任务状态信息，包含任务状态、打印结果等
+        任务状态信息，task_state 可能的值：
+        - READY: 排队中
+        - PARSING: 解析中
+        - SENDING: 发送中
+        - SUCCESS: 成功（此时 task_result.code=200 表示打印成功）
+        - FAILURE: 失败
+        - SET_REVOKE: 标记为撤回
+        - REVOKED: 撤回成功
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 查询任务状态
-        result = client.job_result(task_id)
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"查询任务状态失败: {e}")
-        return {"code": 503, "msg": f"查询任务状态失败: {str(e)}"}
+    client = create_printing_client(device_id, device_key)
+    return client.job_result(task_id)
 
 
 @mcp.tool()
+@handle_errors
 def cancel_print_job(
-    ctx: Context,
     task_id: str,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    取消打印任务
-    
+    """取消打印任务
+
     Args:
         task_id: 任务ID
-        device_id: 设备ID（可选，未提供时使用环境变量）
-        device_key: 设备密钥（可选，未提供时使用环境变量）
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
 
     Returns:
         取消结果
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 取消任务
-        result = client.cancel_job(task_id)
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"取消任务失败: {e}")
-        return {"code": 503, "msg": f"取消任务失败: {str(e)}"}
-
-
-@mcp.tool()
-def get_printer_status(
-    ctx: Context,
-    printer_hash: str, 
-    device_id: Optional[str] = None, 
-    device_key: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    获取打印机实时状态
-    
-    Args:
-        printer_hash: 打印机唯一id
-        device_id: 设备ID（可选，未提供时使用环境变量）
-        device_key: 设备密钥（可选，未提供时使用环境变量）
-    
-    Returns:
-        打印机状态信息，包含缺纸、卡纸、盖子状态等
-    """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_lianke_client(api_key, device_id, device_key)
-        
-        # 获取打印机状态
-        result = client.printer_status(printer_hash)
-        if result is None:
-            return {"code": 503, "msg": "获取打印机状态失败"}
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"获取打印机状态失败: {e}")
-        return {"code": 503, "msg": f"获取打印机状态失败: {str(e)}"}
+    client = create_printing_client(device_id, device_key)
+    return client.cancel_job(task_id)
 
 
 # ==================== 扫描相关工具 ====================
 
 @mcp.tool()
+@handle_errors
 def get_scanner_list(
-    ctx: Context,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    获取扫描仪列表
-    
+    """获取扫描仪列表
+
     Args:
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
-        扫描仪列表信息，包含扫描仪型号、端口、状态等
+        扫描仪列表信息
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_scanning_client(api_key, device_id, device_key)
-        
-        # 获取扫描仪列表
-        result = client.scanner_list()
-        scanners = result.get("data", {}).get("row", [])
-        
-        return {
-            "code": 200,
-            "msg": "success",
-            "data": {
-                "scanners": scanners,
-                "total": len(scanners)
-            }
-        }
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"获取扫描仪列表失败: {e}")
-        return {"code": 503, "msg": f"获取扫描仪列表失败: {str(e)}"}
+    client = create_scanning_client(device_id, device_key)
+    result = client.scanner_list()
+    scanners = result.get("data", {}).get("row", [])
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {"scanners": scanners, "total": len(scanners)}
+    }
 
 
 @mcp.tool()
+@handle_errors
 def get_scanner_status(
-    ctx: Context,
     scanning_id: int,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    获取扫描仪状态
-    
+    """获取扫描仪状态
+
     Args:
         scanning_id: 扫描仪ID
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
         扫描仪状态信息
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_scanning_client(api_key, device_id, device_key)
-        
-        # 获取扫描仪状态
-        result = client.scanner_status(scanning_id)
-        return {
-            "code": 200,
-            "msg": "success",
-            "data": result.get("data", {})
-        }
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"获取扫描仪状态失败: {e}")
-        return {"code": 503, "msg": f"获取扫描仪状态失败: {str(e)}"}
+    client = create_scanning_client(device_id, device_key)
+    result = client.scanner_status(scanning_id)
+    return {"code": 200, "msg": "success", "data": result.get("data", {})}
 
 
 @mcp.tool()
+@handle_errors
 def get_scanner_params(
-    ctx: Context,
     scanning_id: int,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    获取扫描仪参数配置
-    
+    """获取扫描仪参数配置
+
     Args:
         scanning_id: 扫描仪ID
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
         扫描仪参数配置，包含分辨率、颜色模式、文档格式等选项
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_scanning_client(api_key, device_id, device_key)
-        
-        # 获取扫描仪参数
-        result = client.scanner_params(scanning_id)
-        return {
-            "code": 200,
-            "msg": "success",
-            "data": result.get("data", {})
-        }
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"获取扫描仪参数失败: {e}")
-        return {"code": 503, "msg": f"获取扫描仪参数失败: {str(e)}"}
+    client = create_scanning_client(device_id, device_key)
+    result = client.scanner_params(scanning_id)
+    return {"code": 200, "msg": "success", "data": result.get("data", {})}
 
 
 @mcp.tool()
+@handle_errors
 def create_scan_job(
-    ctx: Context,
     scanning_id: int,
-    color_mode,
+    color_mode: str,
     input_source: str = "Platen",
     format: str = "JPEG",
     duplex: int = 0,
@@ -734,219 +508,76 @@ def create_scan_job(
     device_id: Optional[str] = None,
     device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    创建扫描任务
-    
+    """创建扫描任务
+
     Args:
         scanning_id: 扫描仪ID
         color_mode: 色彩模式（从扫描参数读取）
-        input_source: 输入源类型（从扫描参数读取）
-        format: 输出格式（从扫描参数读取）
-        duplex: 是否双面（从扫描参数读取，只有ADF情况下能用，只有扫描仪参数支持时可用）
+        input_source: 输入源类型（从扫描参数读取，如 Platen=平板, ADF=自动进纸器）
+        format: 输出格式（从扫描参数读取，如 JPEG, PDF）
+        duplex: 是否双面（仅ADF模式且扫描仪支持时可用，0=单面, 1=双面）
         size: 文件尺寸（如A4，默认为全屏扫描）
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
-        任务创建结果，包含task_id用于后续查询
+        包含 task_id 的任务创建结果
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_scanning_client(api_key, device_id, device_key)
-        
-        # 构建扫描参数
-        scan_params = {
-            "colorMode": color_mode,
-            "inputSource": input_source,
-            "format": format,
-            "duplex": duplex
-        }
-        
-        # 添加可选参数
-        if size:
-            scan_params["size"] = size
-        
-        # 创建扫描任务
-        result = client.create_scan_job(scanning_id, **scan_params)
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"创建扫描任务失败: {e}")
-        return {"code": 503, "msg": f"创建扫描任务失败: {str(e)}"}
+    client = create_scanning_client(device_id, device_key)
+
+    scan_params = {
+        "colorMode": color_mode,
+        "inputSource": input_source,
+        "format": format,
+        "duplex": duplex
+    }
+    if size:
+        scan_params["size"] = size
+
+    return client.create_scan_job(scanning_id, **scan_params)
 
 
 @mcp.tool()
+@handle_errors
 def get_scan_job_status(
-    ctx: Context,
     task_id: str,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    查询扫描任务状态
-    
+    """查询扫描任务状态
+
     Args:
         task_id: 任务ID（创建任务时返回的task_id）
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
-        任务状态信息，包含任务状态、扫描结果等
+        任务状态信息
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_scanning_client(api_key, device_id, device_key)
-        
-        # 查询任务状态
-        result = client.query_scan_job(task_id)
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"查询扫描任务状态失败: {e}")
-        return {"code": 503, "msg": f"查询扫描任务状态失败: {str(e)}"}
+    client = create_scanning_client(device_id, device_key)
+    return client.query_scan_job(task_id)
 
 
 @mcp.tool()
+@handle_errors
 def delete_scan_job(
-    ctx: Context,
     task_id: str,
     device_id: Optional[str] = None,
     device_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    删除扫描任务
-    
+    """删除扫描任务
+
     Args:
         task_id: 任务ID
-        device_id: 设备ID（可选，未提供时从请求头获取）
-        device_key: 设备密钥（可选，未提供时从请求头获取）
-    
+        device_id: 设备ID（可选）
+        device_key: 设备密钥（可选）
+
     Returns:
         删除结果
     """
-    headers = ctx.request_context.request.headers
-    
-    try:
-        # 从请求头获取配置信息
-        api_key = headers.get("ApiKey")
-        device_id = headers.get("DeviceId") or device_id
-        device_key = headers.get("DeviceKey") or device_key
-        
-        if not api_key:
-            return {"code": 400, "msg": "请求头中缺少 ApiKey"}
-        
-        # 创建客户端
-        client = create_scanning_client(api_key, device_id, device_key)
-        
-        # 删除任务
-        result = client.delete_scan_job(task_id)
-        return result
-        
-    except LiankePrintingException as e:
-        return {"code": e.code or 503, "msg": e.msg}
-    except ValueError as e:
-        return {"code": 400, "msg": str(e)}
-    except Exception as e:
-        logger.error(f"删除扫描任务失败: {e}")
-        return {"code": 503, "msg": f"删除扫描任务失败: {str(e)}"}
+    client = create_scanning_client(device_id, device_key)
+    return client.delete_scan_job(task_id)
 
-
-# 添加提示模板
-@mcp.prompt()
-def print_job_prompt(
-    file_url: str,
-    paper_size: str = "A4",
-    copies: int = 1,
-    color: str = "黑白"
-) -> str:
-    """生成打印任务提示"""
-    return f"""
-请帮我提交一个打印任务：
-- 文件URL: {file_url}
-- 纸张尺寸: {paper_size}
-- 打印份数: {copies}
-- 打印颜色: {color}
-
-1.请确认设备ID和设备密钥已正确配置
-2.从打印机列表读取打印机hash_id，对应变量名称为printerHash
-3.读取打印机相关参数get_printer_params
-4.使用get_printer_params的对应参数，提交打印任务。
-
-注意事项：
-1. 优先使用USB打印机打印
-2. 支持彩色打印优先使用彩色打印
-"""
-
-
-@mcp.prompt()
-def device_setup_prompt(device_id: str = "", device_key: str = "") -> str:
-    """生成设备配置提示"""
-    return f"""
-链科云打印盒设备配置：
-
-1. 设备ID: {device_id or '请从二维码获取,并附带在请求头'}
-2. 设备密钥: {device_key or '请从二维码获取,并附带在请求头'}
-3. API密钥: 请通过请求头 ApiKey 提供
-
-配置步骤：
-1. 扫描设备二维码获取deviceId和deviceKey
-2. 到开放平台(https://open.liankenet.com/)注册获取ApiKey
-3. 在请求头中设置 ApiKey、DeviceId、DeviceKey
-4. 使用get_printer_list工具获取打印机列表
-5. 使用submit_print_job工具提交打印任务
-6. 使用get_scanner_list工具获取扫描仪列表
-7. 使用create_scan_job工具创建扫描任务
-
-注意事项：
-1. printer_list的hash_id为printerHash，字符串变量
-2. 所有配置信息都通过请求头传递，不再使用环境变量
-"""
-
-
-@mcp.prompt()
-def scan_job_prompt(
-    scanning_id: int = 0,
-    resolution: int = 300,
-    color_mode: str = "彩色"
-) -> str:
-    """生成扫描任务提示"""
-    return f"""
-请帮我创建一个扫描任务：
-- 扫描仪ID: {scanning_id or '请先获取扫描仪列表'}
-- 分辨率: {resolution} DPI
-- 颜色模式: {color_mode}
-
-注意事项：
-1.scanner_id是scanner_list返回的id，数字
-"""
 
 if __name__ == '__main__':
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="stdio")
