@@ -4,7 +4,22 @@ description: |
   链科云打印盒 - 通过云API远程控制打印机和扫描仪。
   当用户需要打印文件、查询打印机状态、提交打印任务、扫描文档时使用此 Skill。
   触发词：打印、print、扫描、scan、打印机、printer、云打印盒。
-metadata: {"openclaw":{"install":{"uv":{"packages":["mcp[cli]>=1.15.0","requests>=2.32.5"]}}}}
+allowed-tools:
+  - get_device_info
+  - get_printer_list
+  - get_printer_params
+  - get_printer_status
+  - submit_print_job
+  - submit_print_job_with_file
+  - get_job_status
+  - cancel_print_job
+  - get_scanner_list
+  - get_scanner_status
+  - get_scanner_params
+  - create_scan_job
+  - get_scan_job_status
+  - delete_scan_job
+metadata: {"openclaw":{"requires":{"binaries":["uv"]},"install":{"uv":{"packages":["mcp[cli]>=1.15.0","requests>=2.32.5"]}}}}
 ---
 
 
@@ -12,6 +27,29 @@ metadata: {"openclaw":{"install":{"uv":{"packages":["mcp[cli]>=1.15.0","requests
 ## 概述
 
 链科云打印盒 MCP 提供通过云API远程控制打印机和扫描仪的能力。所有操作通过链科云服务器中转到本地打印盒硬件设备。
+
+## OpenClaw 安装配置
+
+安装此 Skill 后，需要在 `openclaw.json` 中添加 MCP 服务器配置，以使工具生效：
+
+```json
+{
+  "mcp": {
+    "liankePrintBox": {
+      "type": "local",
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/mcp-lk-print-box", "main.py"],
+      "env": {
+        "ApiKey": "你的API密钥（从 open.liankenet.com 获取）",
+        "DeviceId": "你的设备ID（从设备二维码获取）",
+        "DeviceKey": "你的设备密钥（从设备二维码获取）"
+      }
+    }
+  }
+}
+```
+
+> 请将 `/path/to/mcp-lk-print-box` 替换为实际的项目目录路径。
 
 ## 前置条件
 
