@@ -1,4 +1,13 @@
-# 链科云打印盒 Skill
+---
+name: lianke-print-box
+description: |
+  链科云打印盒 - 通过云API远程控制打印机和扫描仪。
+  当用户需要打印文件、查询打印机状态、提交打印任务、扫描文档时使用此 Skill。
+  触发词：打印、print、扫描、scan、打印机、printer、云打印盒。
+metadata: {"openclaw":{"install":{"uv":{"packages":["mcp[cli]>=1.15.0","requests>=2.32.5"]}}}}
+---
+
+
 
 ## 概述
 
