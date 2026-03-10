@@ -34,7 +34,18 @@ lk-print job-status <id>   # 查询状态
 
 ## OpenClaw Skill
 
-将 `SKILL.md` 安装为 OpenClaw Skill 后，AI 会自动按流程调用 CLI 命令完成打印/扫描操作。
+```bash
+# 1. 安装 Skill
+npx clawhub@latest install ai-lk-print-box
+
+# 2. 安装 CLI 工具
+uv tool install git+https://github.com/liankenet/ai-lk-print-box.git
+
+# 3. 认证
+lk-print auth --api-key <KEY> --device-id <ID> --device-key <KEY>
+```
+
+安装完成后，AI 会自动按 SKILL.md 中的流程调用 CLI 命令完成打印/扫描操作。
 
 ## 凭据获取
 
