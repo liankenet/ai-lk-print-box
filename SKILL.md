@@ -1,7 +1,7 @@
 ---
 name: lianke-print-box
-description: "链科云打印盒 - 通过 lk-print CLI 远程打印和扫描。当用户需要打印文件、查询打印机状态、提交打印任务、扫描文档时使用此 Skill。NOT for: 本地打印机直接操作、非链科设备。"
-metadata: {"openclaw":{"emoji":"🖨️","requires":{"bins":["lk-print"]},"install":[{"id":"uv","kind":"uv","package":"git+https://github.com/liankenet/ai-lk-print-box.git","bins":["lk-print"],"label":"Install lk-print (uv)"}]}}
+description: "链科云打印盒 - 通过 lk-print CLI 远程打印和扫描。需要先运行 lk-print auth 配置 ApiKey/DeviceId/DeviceKey 凭据（或通过环境变量提供）。当用户需要打印文件、查询打印机状态、提交打印任务、扫描文档时使用此 Skill。NOT for: 本地打印机直接操作、非链科设备。"
+metadata: {"openclaw":{"emoji":"🖨️","primaryEnv":"ApiKey","requires":{"bins":["lk-print"]},"install":[{"id":"uv","kind":"uv","package":"git+https://github.com/liankenet/ai-lk-print-box.git","bins":["lk-print"],"label":"Install lk-print (uv)"}]}}
 ---
 
 # 链科云打印盒 Skill
