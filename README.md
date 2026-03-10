@@ -47,6 +47,10 @@ lk-print auth --api-key <KEY> --device-id <ID> --device-key <KEY>
 
 安装完成后，AI 会自动按 SKILL.md 中的流程调用 CLI 命令完成打印/扫描操作。
 
+## 演示
+
+![演示图片](tests/e8c77e8a2cf4972b4a50eb31c89833c0.jpg)
+
 ## 凭据获取
 
 | 凭据 | 来源 |
