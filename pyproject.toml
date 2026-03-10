@@ -17,7 +17,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["lianke_printing"]
-include = ["main.py"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"main.py" = "main.py"
 
 [[tool.uv.index]]
 url = "https://mirrors.cloud.tencent.com/pypi/simple"

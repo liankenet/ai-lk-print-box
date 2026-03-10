@@ -27,8 +27,8 @@ metadata: {"openclaw":{"emoji":"🖨️","requires":{"bins":["lk-print"]},"insta
 ## Setup
 
 ```bash
-# 安装（需要 uvx/uv）
-uvx --from git+https://github.com/liankenet/mcp-lk-print-box.git mcp-lk-print-box --help
+# 全局安装（注册 lk-print 到 PATH）
+uv tool install git+https://github.com/liankenet/mcp-lk-print-box.git
 
 # 一次性认证
 lk-print auth --api-key <YOUR_API_KEY> --device-id <YOUR_DEVICE_ID> --device-key <YOUR_DEVICE_KEY>

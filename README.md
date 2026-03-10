@@ -7,10 +7,10 @@
 ### 安装
 
 ```bash
-# 通过 uvx 直接运行（无需 clone）
-uvx --from git+https://github.com/liankenet/mcp-lk-print-box.git lk-print --help
+# 全局安装（推荐）
+uv tool install git+https://github.com/liankenet/mcp-lk-print-box.git
 
-# 或本地安装
+# 或本地开发安装
 git clone git@github.com:liankenet/mcp-lk-print-box.git
 cd mcp-lk-print-box
 uv sync
