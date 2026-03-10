@@ -8,11 +8,11 @@
 
 ```bash
 # 全局安装（推荐）
-uv tool install git+https://github.com/liankenet/mcp-lk-print-box.git
+uv tool install git+https://github.com/liankenet/lk-print-box.git
 
 # 或本地开发安装
-git clone git@github.com:liankenet/mcp-lk-print-box.git
-cd mcp-lk-print-box
+git clone git@github.com:liankenet/lk-print-box.git
+cd lk-print-box
 uv sync
 ```
 

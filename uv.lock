@@ -52,7 +52,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mcp-lk-print-box"
+name = "lk-print-box"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

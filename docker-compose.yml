@@ -1,9 +1,9 @@
 services:
-  mcp-lk-print-box:
+  lk-print-box:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: mcp-lk-print-box
+    container_name: lk-print-box
     restart: unless-stopped
     # 端口映射（如果需要HTTP接口）
     ports:

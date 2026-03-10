@@ -1,5 +1,5 @@
 [project]
-name = "mcp-lk-print-box"
+name = "lk-print-box"
 version = "0.2.0"
 description = "链科云打印盒 CLI - 让 AI 驱动打印和扫描"
 readme = "README.md"
